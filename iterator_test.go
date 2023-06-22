@@ -177,7 +177,6 @@ func TestEmptyListFirstCall(t *testing.T) {
 			t.Error("and it should return zero value result")
 		}
 	}
-
 }
 
 func TestCursorIterator_CallbackIteration(t *testing.T) {
@@ -246,5 +245,4 @@ func TestCursorIterator_CallbackIteration(t *testing.T) {
 			}
 		})
 	}
-
 }
