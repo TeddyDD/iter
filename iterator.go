@@ -6,48 +6,55 @@ import (
 
 var ErrStop = errors.New("iterator stopped")
 
-type CursorIterator[Request, Response any] struct {
-	response Response
-	request  Request
-	next     bool
-	hasNext  func(response Response) (Request, bool)
-	getNext  func(request Request) (Response, error)
-	firstFn  func() Request
+// Cursor can be used to iterate API or database.  It drives iteration with
+// functions provided via [Config].
+type Cursor[Request, Response any] struct {
+	response        Response
+	request         Request
+	next            bool
+	hasNext         func(response Response) (Request, bool)
+	fetchNext       func(request Request) (Response, error)
+	getFirstRequest func() Request
 }
 
 type Config[Request, Response any] struct {
-	HasNext  func(response Response) (Request, bool)
-	GetNext  func(request Request) (Response, error)
-	GetFirst func() Request
+	// HasNext checks if response indicates there is more Responses
+	// to fetch.
+	HasNext func(response Response) (Request, bool)
+	// FetchNext should fetch next Response.
+	FetchNext func(request Request) (Response, error)
+	// GetFirstRequest must return initial request that can be used by
+	// the cursor.
+	GetFirstRequest func() Request
 }
 
 // New creates a new instance of CursorIterator with the provided functions.
 func New[Request, Response any](
 	config Config[Request, Response],
-) *CursorIterator[Request, Response] {
-	return &CursorIterator[Request, Response]{
-		next:    true,
-		hasNext: config.HasNext,
-		getNext: config.GetNext,
-		firstFn: config.GetFirst,
+) *Cursor[Request, Response] {
+	return &Cursor[Request, Response]{
+		next:            true,
+		hasNext:         config.HasNext,
+		fetchNext:       config.FetchNext,
+		getFirstRequest: config.GetFirstRequest,
 	}
 }
 
 // Next returns true if there are more elements to iterate, false otherwise.
-func (d *CursorIterator[Request, Response]) Next() bool {
+func (d *Cursor[Request, Response]) Next() bool {
 	return d.next
 }
 
 // Get returns the current element of the iterator and advances to the next element.
 // An error is returned if called when there are no more elements.
-func (d *CursorIterator[Request, Response]) Get() (Response, error) {
+func (d *Cursor[Request, Response]) Get() (Response, error) {
 	if !d.next {
 		return d.response, ErrStop
 	}
 
 	var err error
 
-	d.response, err = d.getNext(d.request)
+	d.response, err = d.fetchNext(d.request)
 	if err != nil {
 		return d.response, err
 	}
@@ -59,7 +66,7 @@ func (d *CursorIterator[Request, Response]) Get() (Response, error) {
 // Iterate iterates over the elements using the provided callback function.
 // It stops iterating if the callback function returns the ErrStop sentinel error.
 // Any other error returned by the callback function will be propagated.
-func (d *CursorIterator[Request, Response]) Iterate(callback func(response Response) error) error {
+func (d *Cursor[Request, Response]) Iterate(callback func(response Response) error) error {
 	for d.Next() {
 		response, err := d.Get()
 		if err != nil {
@@ -81,7 +88,7 @@ func (d *CursorIterator[Request, Response]) Iterate(callback func(response Respo
 }
 
 // Reset reinitializes the iterator by resetting the request using firstFn.
-func (d *CursorIterator[Request, Response]) Reset() {
-	d.request = d.firstFn()
+func (d *Cursor[Request, Response]) Reset() {
+	d.request = d.getFirstRequest()
 	d.next = true
 }

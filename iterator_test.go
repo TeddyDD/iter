@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"go.teddydd.me/iter"
@@ -54,7 +55,13 @@ func MockAPIHandler(recordsCount int) http.Handler {
 	})
 }
 
-func simpleIterator(mockServer *httptest.Server) *iter.CursorIterator[int, []Record] {
+func brokenServerHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "something went wrong", http.StatusInternalServerError)
+	})
+}
+
+func simpleIterator(mockServer *httptest.Server) *iter.Cursor[int, []Record] {
 	return iter.New[int, []Record](iter.Config[int, []Record]{
 		HasNext: func(response []Record) (int, bool) {
 			if len(response) > 0 {
@@ -64,7 +71,7 @@ func simpleIterator(mockServer *httptest.Server) *iter.CursorIterator[int, []Rec
 			// No more records available
 			return 0, false
 		},
-		GetNext: func(request int) ([]Record, error) {
+		FetchNext: func(request int) ([]Record, error) {
 			// Send a request to the mock API server with the lastSeen cursor value
 			reqBody, err := json.Marshal(struct {
 				LastSeen int `json:"lastSeen"`
@@ -97,7 +104,7 @@ func simpleIterator(mockServer *httptest.Server) *iter.CursorIterator[int, []Rec
 
 			return records, nil
 		},
-		GetFirst: func() int {
+		GetFirstRequest: func() int {
 			// Return an initial cursor value
 			return 0
 		},
@@ -244,5 +251,26 @@ func TestCursorIterator_CallbackIteration(t *testing.T) {
 				t.Errorf("expected to get %+v got: %+v", tc.expectError, err)
 			}
 		})
+	}
+}
+
+func TestUnexpectedServerError(t *testing.T) {
+	mockServer := httptest.NewServer(brokenServerHandler())
+	defer mockServer.Close()
+	iterator := simpleIterator(mockServer)
+	err := iterator.Iterate(func(response []Record) error {
+		t.Fatalf("should not be called")
+		return nil
+	})
+	if err == nil {
+		t.Fatalf("should result in error")
+	}
+	if !strings.Contains(err.Error(), "unexpected status code: 500") {
+		t.Fatalf("error should be unexpected status code but got %+v", err)
+	}
+	iterator.Reset()
+	_, err2 := iterator.Get()
+	if err2.Error() != err.Error() {
+		t.Fatalf("error should be unexpected status code but got %+v", err2)
 	}
 }
