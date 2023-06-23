@@ -33,7 +33,9 @@ func New[Input, Result any](
 	config Config[Input, Result],
 ) *Cursor[Input, Result] {
 	return &Cursor[Input, Result]{
-		next:          true,
+		next:  true,
+		input: config.GetFirstInput(),
+
 		hasNext:       config.HasNext,
 		fetchNext:     config.FetchNext,
 		getFirstInput: config.GetFirstInput,
