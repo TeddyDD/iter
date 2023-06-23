@@ -12,17 +12,17 @@ type Cursor[Input, Result any] struct {
 	result        Result
 	input         Input
 	next          bool
-	hasNext       func(response Result) (Input, bool)
-	fetchNext     func(request Input) (Result, error)
+	hasNext       func(result Result) (Input, bool)
+	fetchNext     func(input Input) (Result, error)
 	getFirstInput func() Input
 }
 
 type Config[Input, Result any] struct {
 	// HasNext checks if response indicates there is more Results
 	// to fetch.
-	HasNext func(response Result) (Input, bool)
+	HasNext func(result Result) (Input, bool)
 	// FetchNext should fetch next Result.
-	FetchNext func(request Input) (Result, error)
+	FetchNext func(input Input) (Result, error)
 	// GetFirstInput must return initial input that can be used by
 	// the cursor.
 	GetFirstInput func() Input

@@ -63,21 +63,21 @@ func brokenServerHandler() http.Handler {
 
 func simpleIterator(mockServer *httptest.Server) *iter.Cursor[int, []Record] {
 	return iter.New[int, []Record](iter.Config[int, []Record]{
-		HasNext: func(response []Record) (int, bool) {
-			if len(response) > 0 {
+		HasNext: func(result []Record) (int, bool) {
+			if len(result) > 0 {
 				// Use the last record ID as the cursor value
-				return response[len(response)-1].ID, true
+				return result[len(result)-1].ID, true
 			}
 			// No more records available
 			return 0, false
 		},
-		FetchNext: func(request int) ([]Record, error) {
+		FetchNext: func(input int) ([]Record, error) {
 			// Send a request to the mock API server with the lastSeen cursor value
 			reqBody, err := json.Marshal(struct {
 				LastSeen int `json:"lastSeen"`
 				Limit    int `json:"limit"`
 			}{
-				LastSeen: request,
+				LastSeen: input,
 				Limit:    2, // Specify the desired limit
 			})
 			if err != nil {
