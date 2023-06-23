@@ -104,7 +104,7 @@ func simpleIterator(mockServer *httptest.Server) *iter.Cursor[int, []Record] {
 
 			return records, nil
 		},
-		GetFirstRequest: func() int {
+		GetFirstInput: func() int {
 			// Return an initial cursor value
 			return 0
 		},
