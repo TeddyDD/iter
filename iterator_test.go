@@ -2,6 +2,7 @@ package iter_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,9 +62,21 @@ func brokenServerHandler() http.Handler {
 	})
 }
 
+func dontCallMeEverAgainHandler(t testing.TB) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not call server")
+	})
+}
+
+func testCtx(t testing.TB) context.Context {
+	ctx, c := context.WithCancel(context.Background())
+	t.Cleanup(c)
+	return ctx
+}
+
 func simpleIterator(mockServer *httptest.Server) *iter.Cursor[int, []Record] {
 	return iter.New[int, []Record](iter.Config[int, []Record]{
-		HasNext: func(result []Record) (int, bool) {
+		HasNext: func(ctx context.Context, result []Record) (int, bool) {
 			if len(result) > 0 {
 				// Use the last record ID as the cursor value
 				return result[len(result)-1].ID, true
@@ -71,7 +84,7 @@ func simpleIterator(mockServer *httptest.Server) *iter.Cursor[int, []Record] {
 			// No more records available
 			return 0, false
 		},
-		FetchNext: func(input int) ([]Record, error) {
+		FetchNext: func(ctx context.Context, input int) ([]Record, error) {
 			// Send a request to the mock API server with the lastSeen cursor value
 			reqBody, err := json.Marshal(struct {
 				LastSeen int `json:"lastSeen"`
@@ -84,7 +97,17 @@ func simpleIterator(mockServer *httptest.Server) *iter.Cursor[int, []Record] {
 				return nil, err
 			}
 
-			resp, err := http.Post(mockServer.URL, "application/json", bytes.NewReader(reqBody))
+			req, err := http.NewRequestWithContext(
+				ctx,
+				http.MethodPost,
+				mockServer.URL,
+				bytes.NewReader(reqBody),
+			)
+			if err != nil {
+				return nil, err
+			}
+
+			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				return nil, err
 			}
@@ -111,10 +134,26 @@ func simpleIterator(mockServer *httptest.Server) *iter.Cursor[int, []Record] {
 	})
 }
 
+func brokenIterator() *iter.Cursor[int, []Record] {
+	return iter.New[int, []Record](
+		iter.Config[int, []Record]{
+			HasNext: func(ctx context.Context, result []Record) (int, bool) {
+				return 0, true
+			},
+			FetchNext: func(ctx context.Context, input int) ([]Record, error) {
+				return nil, errors.New("nope")
+			},
+			GetFirstInput: func() int {
+				return 1
+			},
+		},
+	)
+}
+
 func TestCursorIterator_ManualIteration(t *testing.T) {
 	// Start a mock API server
 	mockServer := httptest.NewServer(MockAPIHandler(5)) // Specify the number of records
-	defer mockServer.Close()
+	t.Cleanup(mockServer.Close)
 
 	// Create the CursorIterator
 	iterator := simpleIterator(mockServer)
@@ -122,11 +161,12 @@ func TestCursorIterator_ManualIteration(t *testing.T) {
 	t.Run("ManualIteration", func(t *testing.T) {
 		// Reset the iterator
 		iterator.Reset()
+		ctx := testCtx(t)
 
 		// Iterate manually using Next and Get
 		var results []Record
 		for iterator.Next() {
-			record, err := iterator.Get()
+			record, err := iterator.Get(ctx)
 			if err != nil {
 				t.Errorf("Unexpected error: %v", err)
 			}
@@ -148,7 +188,8 @@ func TestCursorIterator_ManualIteration(t *testing.T) {
 	})
 
 	t.Run("Get on deplated iterator", func(t *testing.T) {
-		results, err := iterator.Get()
+		ctx := testCtx(t)
+		results, err := iterator.Get(ctx)
 		if !errors.Is(err, iter.ErrStop) {
 			t.Errorf("Calling Get on deplated iterator should return ErrStop but got %+v", err)
 		}
@@ -158,8 +199,9 @@ func TestCursorIterator_ManualIteration(t *testing.T) {
 	})
 
 	t.Run("restart", func(t *testing.T) {
+		ctx := testCtx(t)
 		iterator.Reset()
-		results, err := iterator.Get()
+		results, err := iterator.Get(ctx)
 		if err != nil {
 			t.Errorf("expected no error, got: %s", err.Error())
 		}
@@ -178,7 +220,8 @@ func TestEmptyListFirstCall(t *testing.T) {
 		t.Error("Next should return true on first call always")
 	}
 
-	if results, err := iterator.Get(); err != nil {
+	ctx := testCtx(t)
+	if results, err := iterator.Get(ctx); err != nil {
 		t.Error("first call should succeed")
 		if !reflect.DeepEqual(results, []Record{}) {
 			t.Error("and it should return zero value result")
@@ -233,9 +276,10 @@ func TestCursorIterator_CallbackIteration(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			iterator.Reset()
+			ctx := testCtx(t)
 			i := 0
 
-			err := iterator.Iterate(func(response []Record) error {
+			err := iterator.Iterate(ctx, func(_ context.Context, response []Record) error {
 				t.Logf("iter callback %d response %+v", i, response)
 				if i > len(tc.iterCalls)-1 {
 					t.Fatalf("unexpected call %d, response is %+v", i, response)
@@ -256,9 +300,10 @@ func TestCursorIterator_CallbackIteration(t *testing.T) {
 
 func TestUnexpectedServerError(t *testing.T) {
 	mockServer := httptest.NewServer(brokenServerHandler())
+	ctx := testCtx(t)
 	defer mockServer.Close()
 	iterator := simpleIterator(mockServer)
-	err := iterator.Iterate(func(response []Record) error {
+	err := iterator.Iterate(ctx, func(_ context.Context, response []Record) error {
 		t.Fatalf("should not be called")
 		return nil
 	})
@@ -269,8 +314,45 @@ func TestUnexpectedServerError(t *testing.T) {
 		t.Fatalf("error should be unexpected status code but got %+v", err)
 	}
 	iterator.Reset()
-	_, err2 := iterator.Get()
+	_, err2 := iterator.Get(ctx)
 	if err2.Error() != err.Error() {
 		t.Fatalf("error should be unexpected status code but got %+v", err2)
+	}
+}
+
+func TestCancel(t *testing.T) {
+	mockServer := httptest.NewServer(dontCallMeEverAgainHandler(t))
+	ctx, c := context.WithCancel(context.Background())
+
+	c()
+	t.Cleanup(mockServer.Close)
+	iterator := simpleIterator(mockServer)
+	v, err := iterator.Get(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("context should be canceled")
+	}
+	if v != nil {
+		t.Fatal("result should be nil")
+	}
+	err = iterator.Iterate(ctx, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("context should be canceled")
+	}
+}
+
+func TestErrors(t *testing.T) {
+	mockServer := httptest.NewServer(dontCallMeEverAgainHandler(t))
+	ctx := testCtx(t)
+	t.Cleanup(mockServer.Close)
+
+	iterator := brokenIterator()
+	_, err := iterator.Get(ctx)
+	if err.Error() != "nope" {
+		t.FailNow()
+	}
+
+	err = iterator.Iterate(ctx, nil)
+	if err.Error() != "nope" {
+		t.FailNow()
 	}
 }

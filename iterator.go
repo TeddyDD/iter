@@ -1,6 +1,7 @@
 package iter
 
 import (
+	"context"
 	"errors"
 )
 
@@ -12,17 +13,17 @@ type Cursor[Input, Result any] struct {
 	result        Result
 	input         Input
 	next          bool
-	hasNext       func(result Result) (Input, bool)
-	fetchNext     func(input Input) (Result, error)
+	hasNext       func(ctx context.Context, result Result) (Input, bool)
+	fetchNext     func(ctx context.Context, input Input) (Result, error)
 	getFirstInput func() Input
 }
 
 type Config[Input, Result any] struct {
 	// HasNext checks if response indicates there is more Results
 	// to fetch.
-	HasNext func(result Result) (Input, bool)
+	HasNext func(ctx context.Context, result Result) (Input, bool)
 	// FetchNext should fetch next Result.
-	FetchNext func(input Input) (Result, error)
+	FetchNext func(ctx context.Context, input Input) (Result, error)
 	// GetFirstInput must return initial input that can be used by
 	// the cursor.
 	GetFirstInput func() Input
@@ -49,28 +50,28 @@ func (d *Cursor[Input, Result]) Next() bool {
 
 // Get returns the current element of the iterator and advances to the next element.
 // An error is returned if called when there are no more elements.
-func (d *Cursor[Input, Result]) Get() (Result, error) {
+func (d *Cursor[Input, Result]) Get(ctx context.Context) (Result, error) {
 	if !d.next {
 		return d.result, ErrStop
 	}
 
 	var err error
 
-	d.result, err = d.fetchNext(d.input)
+	d.result, err = d.fetchNext(ctx, d.input)
 	if err != nil {
 		return d.result, err
 	}
 
-	d.input, d.next = d.hasNext(d.result)
+	d.input, d.next = d.hasNext(ctx, d.result)
 	return d.result, nil
 }
 
 // Iterate iterates over the elements using the provided callback function.
 // It stops iterating if the callback function returns the ErrStop sentinel error.
 // Any other error returned by the callback function will be propagated.
-func (d *Cursor[Input, Result]) Iterate(callback func(response Result) error) error {
+func (d *Cursor[Input, Result]) Iterate(ctx context.Context, callback func(ctx context.Context, response Result) error) error {
 	for d.Next() {
-		response, err := d.Get()
+		response, err := d.Get(ctx)
 		if err != nil {
 			if errors.Is(err, ErrStop) {
 				return nil
@@ -78,7 +79,7 @@ func (d *Cursor[Input, Result]) Iterate(callback func(response Result) error) er
 			return err
 		}
 
-		if err := callback(response); err != nil {
+		if err := callback(ctx, response); err != nil {
 			if errors.Is(err, ErrStop) {
 				return nil
 			}

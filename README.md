@@ -41,12 +41,12 @@ type MyResult struct {
 
 // Define the configuration for the cursor.
 config := iter.Config[MyInput, MyResult]{
-	HasNext: func(result MyResult) (MyInput, bool) {
+	HasNext func(ctx context.Context, result Result) (Input, bool) {
 		// Implement the logic to check if there are more results to fetch.
 		// Return the next input and a boolean indicating whether there are more results.
 	},
 
-	FetchNext: func(input MyInput) (MyResult, error) {
+	FetchNext func(ctx context.Context, input Input) (Result, error) {
 		// Implement the logic to fetch the next result based on the given input.
 		// Return the fetched result or an error, if any.
 	},
@@ -67,7 +67,7 @@ Use the cursor to iterate over the results:
 
 // Manually iterate using Next and Get.
 for cursor.Next() {
-	result, err := cursor.Get()
+	result, err := cursor.Get(ctx)
 	if err != nil {
 		// Handle the error or stop the iteration.
 		break
@@ -83,7 +83,7 @@ for cursor.Next() {
 }
 
 // Iterate using the Iterate method and a callback function.
-err := cursor.Iterate(func(result MyResult) error {
+err := cursor.Iterate(ctx, func(ctx context.Context, result MyResult) error {
 	// Process the result.
 	// ...
 
